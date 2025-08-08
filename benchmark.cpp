@@ -4,7 +4,8 @@
 #include <mpi.h>
 #include <numeric>
 #include <omp.h>
-#include <print>
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 
 int main(int argc, char *argv[]) {
   int thread_level = 0;
@@ -96,11 +97,11 @@ int main(int argc, char *argv[]) {
       }
     }
   }
-  std::println("send_counts={}, send_displs={}", send_counts, send_displs);
-  std::println("recv_counts={}, recv_displs={}", recv_counts, recv_displs);
-  std::println("thread_send_counts={}, thread_send_displs={}",
+  fmt::println("send_counts={}, send_displs={}", send_counts, send_displs);
+  fmt::println("recv_counts={}, recv_displs={}", recv_counts, recv_displs);
+  fmt::println("thread_send_counts={}, thread_send_displs={}",
                thread_send_counts, thread_send_displs);
-  std::println("thread_recv_counts={}, thread_recv_displs={}",
+  fmt::println("thread_recv_counts={}, thread_recv_displs={}",
                thread_recv_counts, thread_recv_displs);
 
   std::vector<int, kamping::default_init_allocator<int>> recv_buf(
@@ -114,7 +115,7 @@ int main(int argc, char *argv[]) {
                   thread_recv_counts[tid].data(),
                   thread_recv_displs[tid].data(), MPI_INT, thread_comm[tid]);
   }
-  std::println("recv_buf={}", recv_buf);
+  fmt::println("recv_buf={}", recv_buf);
 
   bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
                                  [&](auto &val) { return val == rank; });
