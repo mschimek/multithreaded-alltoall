@@ -1,0 +1,11 @@
+# -*- mode: yaml; -*-
+BasedOnStyle: Chromium
+AccessModifierOffset: '-2'
+AllowShortCaseLabelsOnASingleLine: 'false'
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Inline
+AllowShortLoopsOnASingleLine: 'false'
+ColumnLimit: '80'
+IndentWidth: '2'
+PPIndentWidth: '-1'
