@@ -1,11 +1,11 @@
 #include "./default_init_allocator.hpp"
 #include <CLI/CLI.hpp>
 #include <algorithm>
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <mpi.h>
 #include <numeric>
 #include <omp.h>
-#include <fmt/format.h>
-#include <fmt/ranges.h>
 
 int main(int argc, char *argv[]) {
   int thread_level = 0;
@@ -55,10 +55,10 @@ int main(int argc, char *argv[]) {
       send_displs[dest] = send_displs[dest - 1] + send_counts[dest - 1];
     }
     auto elems_per_thread = send_counts[dest] / num_threads;
-    auto remainder_threads = elems_per_thread % num_threads;
+    auto remainder_threads = send_counts[dest] % num_threads;
     for (std::size_t tid = 0; tid < num_threads; tid++) {
       thread_send_counts[tid][dest] =
-          elems_per_thread + (tid <= remainder_threads);
+          elems_per_thread + (tid < remainder_threads);
       if (tid == 0) {
         thread_send_displs[tid][dest] = send_displs[dest];
       } else {
@@ -80,8 +80,14 @@ int main(int argc, char *argv[]) {
     MPI_Alltoall(thread_send_counts[tid].data(), 1, MPI_INT,
                  thread_recv_counts[tid].data(), 1, MPI_INT, thread_comm[tid]);
   }
-  MPI_Alltoall(send_counts.data(), 1, MPI_INT, recv_counts.data(), 1, MPI_INT,
-               MPI_COMM_WORLD);
+#pragma omp parallel for schedule(static)
+  for (std::size_t source = 0; source < static_cast<std::size_t>(size);
+       source++) {
+    for (std::size_t tid = 0; tid < num_threads; tid++) {
+      recv_counts[source] += thread_recv_counts[tid][source];
+    }
+  }
+
   std::exclusive_scan(recv_counts.begin(), recv_counts.end(),
                       recv_displs.begin(), 0);
 
@@ -97,12 +103,12 @@ int main(int argc, char *argv[]) {
       }
     }
   }
-  fmt::println("send_counts={}, send_displs={}", send_counts, send_displs);
-  fmt::println("recv_counts={}, recv_displs={}", recv_counts, recv_displs);
-  fmt::println("thread_send_counts={}, thread_send_displs={}",
-               thread_send_counts, thread_send_displs);
-  fmt::println("thread_recv_counts={}, thread_recv_displs={}",
-               thread_recv_counts, thread_recv_displs);
+  // fmt::println("send_counts={}, send_displs={}", send_counts, send_displs);
+  // fmt::println("recv_counts={}, recv_displs={}", recv_counts, recv_displs);
+  // fmt::println("thread_send_counts={}, thread_send_displs={}",
+  //              thread_send_counts, thread_send_displs);
+  // fmt::println("thread_recv_counts={}, thread_recv_displs={}",
+  //              thread_recv_counts, thread_recv_displs);
 
   std::vector<int, kamping::default_init_allocator<int>> recv_buf(
       recv_displs.back() + recv_counts.back());
@@ -115,7 +121,7 @@ int main(int argc, char *argv[]) {
                   thread_recv_counts[tid].data(),
                   thread_recv_displs[tid].data(), MPI_INT, thread_comm[tid]);
   }
-  fmt::println("recv_buf={}", recv_buf);
+  // fmt::println("recv_buf={}", recv_buf);
 
   bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
                                  [&](auto &val) { return val == rank; });
