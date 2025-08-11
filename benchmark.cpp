@@ -6,7 +6,12 @@
 #include <omp.h>
 #include <CLI/CLI.hpp>
 #include <algorithm>
+#include <cassert>
+#include <kamping/communicator.hpp>
+#include <kamping/session.hpp>
+#include <kamping/thread_levels.hpp>
 #include <numeric>
+#include <string_view>
 #include "./default_init_allocator.hpp"
 
 template <typename T>
@@ -14,73 +19,55 @@ using vec = std::vector<int, kamping::default_init_allocator<int>>;
 
 class SingleThreadedAlltoAll {
 public:
-  SingleThreadedAlltoAll() {
-    MPI_Info info = MPI_INFO_NULL;
-    MPI_Info_create(&info);
-    MPI_Info_set(info, "thread_level", "MPI_THREAD_FUNNELED");
-    MPI_Session_init(info, MPI_ERRORS_ARE_FATAL, &session_);
-    MPI_Info_free(&info);
-    MPI_Group group = MPI_GROUP_NULL;
-    MPI_Group_from_session_pset(session_, "mpi://WORLD", &group);
-    MPI_Comm_create_from_group(group, "edu.kit.iti.ae.a2a.single",
-                               MPI_INFO_NULL, MPI_ERRORS_ARE_FATAL, &comm_);
-    MPI_Group_free(&group);
+  SingleThreadedAlltoAll() : session_(kamping::ThreadLevel::funneled) {
+    assert(session_.get_info().get<kamping::ThreadLevel>("thread_level") >=
+           kamping::ThreadLevel::funneled);
+    comm_ = session_.group_from_pset(kamping::psets::world)
+                ->create_comm("edu.kit.iti.ae.a2a.single");
   }
 
   vec<int> alltoall(vec<int> const& send_buf,
                     std::vector<int> const& send_counts,
                     std::vector<int> const& send_displs) const {
-    int size = 0;
-    MPI_Comm_size(comm_, &size);
+    int size = comm_.size_signed();
     std::vector<int> recv_counts(size);
     std::vector<int> recv_displs(size);
     MPI_Alltoall(send_counts.data(), 1, MPI_INT, recv_counts.data(), 1, MPI_INT,
-                 comm_);
+                 comm_.mpi_communicator());
     std::exclusive_scan(recv_counts.begin(), recv_counts.end(),
                         recv_displs.begin(), 0);
 
     vec<int> recv_buf(recv_displs.back() + recv_counts.back());
     MPI_Alltoallv(send_buf.data(), send_counts.data(), send_displs.data(),
                   MPI_INT, recv_buf.data(), recv_counts.data(),
-                  recv_displs.data(), MPI_INT, comm_);
+                  recv_displs.data(), MPI_INT, comm_.mpi_communicator());
 
     return recv_buf;
   }
 
-  ~SingleThreadedAlltoAll() {
-    MPI_Comm_free(&comm_);
-    MPI_Session_finalize(&session_);
-  }
-
 private:
-  MPI_Session session_ = MPI_SESSION_NULL;
-  MPI_Comm comm_ = MPI_COMM_NULL;
+  kamping::Session session_;
+  kamping::Communicator<> comm_;
 };
 
 class MultiThreadedAlltoAll {
 public:
-  MultiThreadedAlltoAll() {
-    MPI_Info info = MPI_INFO_NULL;
-    MPI_Info_create(&info);
-    MPI_Info_set(info, "thread_level", "MPI_THREAD_MULTIPLE");
-    MPI_Session_init(info, MPI_ERRORS_ARE_FATAL, &session_);
-    MPI_Info_free(&info);
-    MPI_Group group = MPI_GROUP_NULL;
-    MPI_Group_from_session_pset(session_, "mpi://WORLD", &group);
-    MPI_Comm_create_from_group(group, "edu.kit.iti.ae.a2a.single",
-                               MPI_INFO_NULL, MPI_ERRORS_ARE_FATAL, &comm_);
-    MPI_Group_free(&group);
+  MultiThreadedAlltoAll() : session_(kamping::ThreadLevel::multiple) {
+    assert(session_.get_info().get<kamping::ThreadLevel>("thread_level") >=
+           kamping::ThreadLevel::multiple);
+    comm_ = session_.group_from_pset(kamping::psets::world)
+      ->create_comm("edu.kit.iti.ae.a2a.multi");
     thread_comm_.resize(omp_get_max_threads());
     for (auto& comm : thread_comm_) {
-      MPI_Comm_dup(comm_, &comm);
+      MPI_Comm_dup(comm_.mpi_communicator(), &comm);
     }
   }
 
   vec<int> alltoall(vec<int> const& send_buf,
                     std::vector<int> const& send_counts,
                     std::vector<int> const& send_displs) const {
-    int size = 0;
-    MPI_Comm_size(comm_, &size);
+    int size = comm_.size_signed();
+    int rank = comm_.rank_signed();
 
     std::size_t max_threads = omp_get_max_threads();
     std::vector<std::vector<int>> thread_send_counts(max_threads,
@@ -117,11 +104,16 @@ public:
           }
         }
       }
+
 #pragma omp barrier
+      fmt::println("Rank {}, starting a2a for thread {}", rank, my_tid);
       // exchange the counts
       MPI_Alltoall(thread_send_counts[my_tid].data(), 1, MPI_INT,
                    thread_recv_counts[my_tid].data(), 1, MPI_INT,
                    thread_comm_[my_tid]);
+
+      fmt::println("Rank {}, finished a2a for thread {}", rank, my_tid);
+
 #pragma omp for schedule(static)
       for (std::size_t source = 0; source < static_cast<std::size_t>(size);
            source++) {
@@ -152,6 +144,8 @@ public:
       {
         recv_buf.resize(recv_displs.back() + recv_counts.back());
       }
+
+      fmt::println("Rank {}, starting a2a for thread {}", rank, my_tid);
       MPI_Alltoallv(send_buf.data(), thread_send_counts[my_tid].data(),
                     thread_send_displs[my_tid].data(), MPI_INT, recv_buf.data(),
                     thread_recv_counts[my_tid].data(),
@@ -166,13 +160,11 @@ public:
     for (auto& comm : thread_comm_) {
       MPI_Comm_free(&comm);
     }
-    MPI_Comm_free(&comm_);
-    MPI_Session_finalize(&session_);
   }
 
 private:
-  MPI_Session session_ = MPI_SESSION_NULL;
-  MPI_Comm comm_ = MPI_COMM_NULL;
+  kamping::Session session_;
+  kamping::Communicator<> comm_;
   std::vector<MPI_Comm> thread_comm_;
 };
 
@@ -211,8 +203,11 @@ auto generate_data(MPI_Comm comm, std::size_t num_elements) {
 }
 
 int main(int argc, char* argv[]) {
-  int thread_level = 0;
-  MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &thread_level);
+  kamping::Session session(kamping::ThreadLevel::funneled);
+
+  kamping::Communicator<> comm = session.group_from_pset(kamping::psets::world)
+                                     ->create_comm("edu.kit.iti.ae.a2a.main");
+
   CLI::App app;
   std::size_t num_threads = 1;
   app.add_option("-p,--threads", num_threads);
@@ -224,33 +219,18 @@ int main(int argc, char* argv[]) {
   omp_set_dynamic(0);
   omp_set_num_threads(num_threads);
 
-  int rank = 0;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  int rank = comm.rank_signed();
 
   auto [send_buf, send_counts, send_displs] =
-      generate_data(MPI_COMM_WORLD, num_elements);
+      generate_data(comm.mpi_communicator(), num_elements);
 
   fmt::println("Finished data generation");
 
-  // {
-  //   SingleThreadedAlltoAll a2a_single;
-  //   for (std::size_t iteration = 0; iteration < iterations; iteration++) {
-  //     fmt::println("Starting iteration {}", iteration);
-  //     auto recv_buf = a2a_single.alltoall(send_buf, send_counts, send_displs);
-  //     bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
-  //                                    [&](auto& val) { return val == rank; });
-  //     if (!all_correct) {
-  //       std::cerr << "Invalid result!\n";
-  //     }
-  //   }
-  // }
-  // fmt::println("Done with single threaded");
-
   {
-    MultiThreadedAlltoAll a2a_multi;
+    SingleThreadedAlltoAll a2a_single;
     for (std::size_t iteration = 0; iteration < iterations; iteration++) {
-      fmt::println("Starting iteration {}", iteration);
-      auto recv_buf = a2a_multi.alltoall(send_buf, send_counts, send_displs);
+      // fmt::println("Starting iteration {}", iteration);
+      auto recv_buf = a2a_single.alltoall(send_buf, send_counts, send_displs);
       bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
                                      [&](auto& val) { return val == rank; });
       if (!all_correct) {
@@ -258,7 +238,19 @@ int main(int argc, char* argv[]) {
       }
     }
   }
+  // fmt::println("Done with single threaded");
 
-  MPI_Finalize();
+  // {
+  //   MultiThreadedAlltoAll a2a_multi;
+  //   for (std::size_t iteration = 0; iteration < iterations; iteration++) {
+  //     // fmt::println("Starting iteration {}", iteration);
+  //     auto recv_buf = a2a_multi.alltoall(send_buf, send_counts, send_displs);
+  //     bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
+  //                                    [&](auto& val) { return val == rank; });
+  //     if (!all_correct) {
+  //       std::cerr << "Invalid result!\n";
+  //     }
+  //   }
+  // }
   return 0;
 }
