@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cassert>
 #include <kamping/communicator.hpp>
+#include <kamping/measurements/printer.hpp>
+#include <kamping/measurements/timer.hpp>
 #include <kamping/session.hpp>
 #include <kamping/thread_levels.hpp>
 #include <numeric>
@@ -56,7 +58,7 @@ public:
     assert(session_.get_info().get<kamping::ThreadLevel>("thread_level") >=
            kamping::ThreadLevel::multiple);
     comm_ = session_.group_from_pset(kamping::psets::world)
-      ->create_comm("edu.kit.iti.ae.a2a.multi");
+                ->create_comm("edu.kit.iti.ae.a2a.multi");
     thread_comm_.resize(omp_get_max_threads());
     for (auto& comm : thread_comm_) {
       MPI_Comm_dup(comm_.mpi_communicator(), &comm);
@@ -106,14 +108,15 @@ public:
       }
 
 #pragma omp barrier
-      fmt::println("Rank {}, starting a2a for thread {}", rank, my_tid);
-      // exchange the counts
+      // fmt::println("Rank {}, starting a2a for thread {}", rank, my_tid);
+      //  exchange the counts
       MPI_Alltoall(thread_send_counts[my_tid].data(), 1, MPI_INT,
                    thread_recv_counts[my_tid].data(), 1, MPI_INT,
                    thread_comm_[my_tid]);
 
-      fmt::println("Rank {}, finished a2a for thread {}", rank, my_tid);
+      // fmt::println("Rank {}, finished a2a for thread {}", rank, my_tid);
 
+#pragma omp barrier
 #pragma omp for schedule(static)
       for (std::size_t source = 0; source < static_cast<std::size_t>(size);
            source++) {
@@ -145,7 +148,7 @@ public:
         recv_buf.resize(recv_displs.back() + recv_counts.back());
       }
 
-      fmt::println("Rank {}, starting a2a for thread {}", rank, my_tid);
+      // fmt::println("Rank {}, starting a2a for thread {}", rank, my_tid);
       MPI_Alltoallv(send_buf.data(), thread_send_counts[my_tid].data(),
                     thread_send_displs[my_tid].data(), MPI_INT, recv_buf.data(),
                     thread_recv_counts[my_tid].data(),
@@ -215,9 +218,17 @@ int main(int argc, char* argv[]) {
   app.add_option("-n,--num_elements", num_elements);
   std::size_t iterations = 10;
   app.add_option("-i,--iterations", iterations);
+  bool run_singlethreaded_alltoall = false;
+  app.add_flag("--run-singlethreaded", run_singlethreaded_alltoall);
+  bool run_multithreaded_alltoall = false;
+  app.add_flag("--run-multithreaded", run_multithreaded_alltoall);
   CLI11_PARSE(app, argc, argv);
   omp_set_dynamic(0);
   omp_set_num_threads(num_threads);
+  std::vector<std::pair<std::string, std::string>> config;
+  config.emplace_back("threads", std::to_string(num_threads));
+  config.emplace_back("elements", std::to_string(num_elements));
+  config.emplace_back("iterations", std::to_string(iterations));
 
   int rank = comm.rank_signed();
 
@@ -226,11 +237,14 @@ int main(int argc, char* argv[]) {
 
   fmt::println("Finished data generation");
 
-  {
+  if (run_singlethreaded_alltoall) {
     SingleThreadedAlltoAll a2a_single;
     for (std::size_t iteration = 0; iteration < iterations; iteration++) {
       // fmt::println("Starting iteration {}", iteration);
+      kamping::measurements::timer().synchronize_and_start(
+          "single-threaded-alltoall");
       auto recv_buf = a2a_single.alltoall(send_buf, send_counts, send_displs);
+      kamping::measurements::timer().stop_and_append();
       bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
                                      [&](auto& val) { return val == rank; });
       if (!all_correct) {
@@ -240,17 +254,26 @@ int main(int argc, char* argv[]) {
   }
   // fmt::println("Done with single threaded");
 
-  // {
-  //   MultiThreadedAlltoAll a2a_multi;
-  //   for (std::size_t iteration = 0; iteration < iterations; iteration++) {
-  //     // fmt::println("Starting iteration {}", iteration);
-  //     auto recv_buf = a2a_multi.alltoall(send_buf, send_counts, send_displs);
-  //     bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
-  //                                    [&](auto& val) { return val == rank; });
-  //     if (!all_correct) {
-  //       std::cerr << "Invalid result!\n";
-  //     }
-  //   }
-  // }
+  if (run_multithreaded_alltoall) {
+    MultiThreadedAlltoAll a2a_multi;
+    for (std::size_t iteration = 0; iteration < iterations; iteration++) {
+      // fmt::println("Starting iteration {}", iteration);
+      kamping::measurements::timer().synchronize_and_start(
+          "multi-threaded-alltoall");
+      auto recv_buf = a2a_multi.alltoall(send_buf, send_counts, send_displs);
+      kamping::measurements::timer().stop_and_append();
+      bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
+                                     [&](auto& val) { return val == rank; });
+      if (!all_correct) {
+        std::cerr << "Invalid result!\n";
+      }
+    }
+  }
+  std::stringstream sstr;
+  kamping::measurements::SimpleJsonPrinter<double> printer_timer(sstr, config);
+  kamping::measurements::timer().aggregate_and_print(printer_timer);
+  if (comm.is_root()) {
+    std::cout << sstr.str() << std::endl;
+  }
   return 0;
 }
