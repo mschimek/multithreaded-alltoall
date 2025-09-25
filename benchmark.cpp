@@ -2,7 +2,6 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <mpi.h>
-#include <mpi_proto.h>
 #include <omp.h>
 #include <CLI/CLI.hpp>
 #include <algorithm>
