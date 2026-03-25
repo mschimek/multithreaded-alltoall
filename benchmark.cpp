@@ -6,6 +6,7 @@
 #include <CLI/CLI.hpp>
 #include <algorithm>
 #include <cassert>
+#include <kamping/collectives/allreduce.hpp>
 #include <kamping/communicator.hpp>
 #include <kamping/environment.hpp>
 #include <kamping/measurements/printer.hpp>
@@ -43,9 +44,11 @@ public:
 
     vec<int> recv_buf(recv_displs.back() + recv_counts.back());
 
+    kamping::measurements::timer().synchronize_and_start("MPI_Alltoallv");
     MPI_Alltoallv(send_buf.data(), send_counts.data(), send_displs.data(),
                   MPI_INT, recv_buf.data(), recv_counts.data(),
                   recv_displs.data(), MPI_INT, comm_);
+    kamping::measurements::timer().stop_and_append();
     return recv_buf;
   }
 
@@ -171,11 +174,14 @@ private:
   std::vector<MPI_Comm> thread_comm_;
 };
 
-auto generate_data(MPI_Comm comm, std::size_t num_elements) {
+auto generate_data(MPI_Comm comm,
+                   std::size_t num_threads,
+                   std::size_t num_elements_per_worker) {
   int rank = 0;
   int size = 0;
   MPI_Comm_rank(comm, &rank);
   MPI_Comm_size(comm, &size);
+  std::size_t num_elements = num_elements_per_worker * num_threads;
 
   vec<int> send_buf(num_elements);
   std::vector<int> send_counts(size);
@@ -212,8 +218,8 @@ int main(int argc, char* argv[]) {
   CLI::App app;
   std::size_t num_threads = 1;
   app.add_option("-p,--threads", num_threads);
-  std::size_t num_elements = 32000;
-  app.add_option("-n,--num_elements", num_elements);
+  std::size_t num_elements_per_worker = 32000;
+  app.add_option("-n,--num-elements-per-worker", num_elements_per_worker);
   std::size_t iterations = 10;
   app.add_option("-i,--iterations", iterations);
   bool run_singlethreaded_alltoall = false;
@@ -241,14 +247,20 @@ int main(int argc, char* argv[]) {
 
   std::vector<std::pair<std::string, std::string>> config;
   config.emplace_back("threads", std::to_string(num_threads));
-  config.emplace_back("elements", std::to_string(num_elements));
+  config.emplace_back("elements", std::to_string(num_elements_per_worker));
   config.emplace_back("iterations", std::to_string(iterations));
 
   auto [send_buf, send_counts, send_displs] =
-      generate_data(MPI_COMM_WORLD, num_elements);
+      generate_data(MPI_COMM_WORLD, num_threads, num_elements_per_worker);
+  std::size_t total_buffer_size = comm.allreduce_single(
+      kamping::send_buf(send_buf.size()), kamping::op(std::plus<>{}));
   comm.barrier();
+
   if (comm.is_root()) {
-    fmt::println("Finished data generation with {} elements per PE", send_buf.size());
+    fmt::println(
+        "Finished data generation with {} elements per worker and {} elements "
+        "in total",
+        send_buf.size(), total_buffer_size);
   }
 
   if (run_singlethreaded_alltoall) {
@@ -258,8 +270,9 @@ int main(int argc, char* argv[]) {
           "single-threaded-alltoall");
       auto recv_buf = a2a_single.alltoall(send_buf, send_counts, send_displs);
       kamping::measurements::timer().stop_and_append();
-      bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
-                                     [&](auto& val) { return val == comm.rank(); });
+      bool all_correct =
+          std::all_of(recv_buf.begin(), recv_buf.end(),
+                      [&](auto& val) { return val == comm.rank(); });
       if (!all_correct) {
         std::cerr << "Invalid result!\n";
       }
@@ -273,8 +286,9 @@ int main(int argc, char* argv[]) {
           "multi-threaded-alltoall");
       auto recv_buf = a2a_multi.alltoall(send_buf, send_counts, send_displs);
       kamping::measurements::timer().stop_and_append();
-      bool all_correct = std::all_of(recv_buf.begin(), recv_buf.end(),
-                                     [&](auto& val) { return val == comm.rank(); });
+      bool all_correct =
+          std::all_of(recv_buf.begin(), recv_buf.end(),
+                      [&](auto& val) { return val == comm.rank(); });
       if (!all_correct) {
         std::cerr << "Invalid result!\n";
       }
