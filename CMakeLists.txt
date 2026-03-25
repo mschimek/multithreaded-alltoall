@@ -19,7 +19,7 @@ FetchContent_Declare(
 FetchContent_Declare(
   kamping
   GIT_REPOSITORY https://github.com/kamping-site/kamping
-  GIT_TAG feature/session-model
+  GIT_TAG main
   EXCLUDE_FROM_ALL SYSTEM)
 
 FetchContent_MakeAvailable(CLI11 fmt kamping)
