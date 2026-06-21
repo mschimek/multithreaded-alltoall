@@ -10,8 +10,18 @@ time_limit: 4
 graphs:
   - generator: dummy
     name: a2a
+    num-elements-per-worker: 10000
+    iterations: 5
+    distribution: [uniform, nonuniform]
+  - generator: dummy
+    name: a2a
+    num-elements-per-worker: 100000
+    iterations: 5
+    distribution: [uniform, nonuniform]
+  - generator: dummy
+    name: a2a
     num-elements-per-worker: 1000000
-    iterations: 10
+    iterations: 5
     distribution: [uniform, nonuniform]
 config:
   - {}
