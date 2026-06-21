@@ -1,0 +1,19 @@
+name: alltoallv-multithreaded
+# Multi-threaded layout: t threads per MPI process, p/t ranks. The exchange is the
+# dstl thread_multiple alltoallv (MPI_THREAD_MULTIPLE), which splits each destination
+# block across t threads and issues t concurrent MPI_Alltoallv calls on t duplicated
+# communicators. OMP_NUM_THREADS=t drives both the thread count and the data volume.
+executable: benchmark_multithreaded
+output_path_option_name: "output-file"
+ncores: [4, 8]
+threads_per_rank: [2, 4]
+omit_seed: true
+time_limit: 4
+graphs:
+  - generator: dummy
+    name: a2a
+    num-elements-per-worker: 1000000
+    iterations: 10
+    distribution: [uniform, nonuniform]
+config:
+  - {}

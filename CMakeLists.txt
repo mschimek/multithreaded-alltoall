@@ -31,10 +31,33 @@ FetchContent_Declare(
   GIT_TAG 09047f3
   SOURCE_SUBDIR dstl
   EXCLUDE_FROM_ALL SYSTEM)
+# JSON reporting (kascade-style): nlohmann/json + kamping's measurement printer
+# adapter for it.
+FetchContent_Declare(
+  nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json
+  GIT_TAG v3.12.0
+  GIT_SHALLOW ON
+  EXCLUDE_FROM_ALL SYSTEM)
+FetchContent_Declare(
+  kamping-nlohmann-json-adapter
+  GIT_REPOSITORY https://github.com/kamping-site/kamping-nlohmann-json-adaptor
+  GIT_TAG main
+  GIT_SHALLOW ON)
 
 # Make v1 available first so its kamping::types target is reused by v2's
 # bootstrap rather than fetched/defined a second time.
-FetchContent_MakeAvailable(CLI11 fmt kamping dstl)
+FetchContent_MakeAvailable(CLI11 fmt kamping dstl nlohmann_json
+                           kamping-nlohmann-json-adapter)
+
+# Experiment runner (kaval) — populated into ./kaval (no CMake target, just
+# fetched into the source tree for run-experiments.py).
+FetchContent_Declare(
+  kaval
+  GIT_REPOSITORY https://github.com/niklas-uhl/kaval.git
+  GIT_TAG main
+  SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/kaval)
+FetchContent_MakeAvailable(kaval)
 
 add_executable(benchmark benchmark.cpp)
 target_link_libraries(benchmark PRIVATE MPI::MPI_CXX CLI11::CLI11
@@ -42,17 +65,17 @@ target_link_libraries(benchmark PRIVATE MPI::MPI_CXX CLI11::CLI11
 target_compile_features(benchmark PRIVATE cxx_std_20)
 
 # Single-threaded baseline: MPI_THREAD_SINGLE init via mpi-core, MPI_Alltoallv.
-add_executable(benchmark_singlethreaded benchmark_singlethreaded.cpp)
+add_executable(benchmark_singlethreaded benchmark_singlethreaded.cpp reporting.cpp)
 target_link_libraries(
   benchmark_singlethreaded
   PRIVATE MPI::MPI_CXX CLI11::CLI11 OpenMP::OpenMP_CXX fmt::fmt kamping::kamping
-          kamping::v2)
+          kamping::v2 nlohmann_json::nlohmann_json kamping::nlohmann-json-adapter)
 target_compile_features(benchmark_singlethreaded PRIVATE cxx_std_20)
 
 # Multi-threaded: MPI_THREAD_MULTIPLE init via mpi-core, dstl flat alltoallv.
-add_executable(benchmark_multithreaded benchmark_multithreaded.cpp)
+add_executable(benchmark_multithreaded benchmark_multithreaded.cpp reporting.cpp)
 target_link_libraries(
   benchmark_multithreaded
   PRIVATE MPI::MPI_CXX CLI11::CLI11 OpenMP::OpenMP_CXX fmt::fmt kamping::kamping
-          dstl::dstl)
+          dstl::dstl nlohmann_json::nlohmann_json kamping::nlohmann-json-adapter)
 target_compile_features(benchmark_multithreaded PRIVATE cxx_std_20)

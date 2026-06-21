@@ -1,0 +1,19 @@
+name: alltoallv-funneled
+# "Funneled" layout: t threads per MPI process, p/t ranks (t cores per rank via
+# I_MPI_PIN_DOMAIN). The exchange is still the single-threaded MPI_Alltoallv, but
+# each rank owns t cores and t*n elements; OMP_NUM_THREADS=t drives data generation
+# and the per-rank data volume. Total data = n*ncores, matching the other suites.
+executable: benchmark_singlethreaded
+output_path_option_name: "output-file"
+ncores: [4, 8]
+threads_per_rank: [2, 4]
+omit_seed: true
+time_limit: 4
+graphs:
+  - generator: dummy
+    name: a2a
+    num-elements-per-worker: 1000000
+    iterations: 10
+    distribution: [uniform, nonuniform]
+config:
+  - {}

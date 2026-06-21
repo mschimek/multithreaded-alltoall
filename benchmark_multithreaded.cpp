@@ -10,13 +10,12 @@
 #include <functional>
 #include <iostream>
 #include <numeric>
-#include <sstream>
 #include <string>
-#include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 // kamping v1: timer / measurement infrastructure (kept for the benchmark output).
-#include <kamping/measurements/printer.hpp>
 #include <kamping/measurements/timer.hpp>
 
 // kamping v2 / dSTL: RAII MPI initialization, communicator + collectives, and the
@@ -32,11 +31,10 @@
 
 #include "./benchmark_check.hpp"
 #include "./benchmark_common.hpp"
+#include "./reporting.hpp"
 
 int main(int argc, char* argv[]) {
   CLI::App app;
-  std::size_t num_threads = 1;
-  app.add_option("-p,--threads", num_threads);
   std::size_t num_elements_per_worker = 32000;
   app.add_option("-n,--num-elements-per-worker", num_elements_per_worker);
   std::size_t iterations = 10;
@@ -45,6 +43,10 @@ int main(int argc, char* argv[]) {
   app.add_option("-d,--distribution", distribution, "uniform|nonuniform");
   std::uint64_t seed = 42;
   app.add_option("--seed", seed);
+  std::string output_file = "stdout";
+  app.add_option("--output-file", output_file,
+                 "Write the report JSON here ('stdout'/'stderr' or a path; a "
+                 "'.json' extension is added to file paths)");
   CLI11_PARSE(app, argc, argv);
   Distribution dist = parse_distribution(distribution);
 
@@ -62,16 +64,20 @@ int main(int argc, char* argv[]) {
         static_cast<int>(mpi::experimental::environment::thread_level()));
   }
 
-  // OpenMP setup
+  // The number of OpenMP threads (and thus the per-rank data volume) is taken
+  // from the environment (OMP_NUM_THREADS), which the kaval command template
+  // sets to threads_per_rank. omp_set_dynamic(0) makes omp_get_max_threads()
+  // report exactly that value.
   omp_set_dynamic(0);
-  omp_set_num_threads(static_cast<int>(num_threads));
+  std::size_t num_threads = static_cast<std::size_t>(omp_get_max_threads());
 
-  std::vector<std::pair<std::string, std::string>> config;
-  config.emplace_back("threads", std::to_string(num_threads));
-  config.emplace_back("elements", std::to_string(num_elements_per_worker));
-  config.emplace_back("iterations", std::to_string(iterations));
-  config.emplace_back("distribution", to_string(dist));
-  config.emplace_back("seed", std::to_string(seed));
+  nlohmann::ordered_json config;
+  config["algorithm"] = "dstl-multi-threaded-alltoallv";
+  config["threads"] = num_threads;
+  config["elements_per_worker"] = num_elements_per_worker;
+  config["iterations"] = iterations;
+  config["distribution"] = to_string(dist);
+  config["seed"] = seed;
 
   auto [send_buf, send_counts, send_displs] =
       generate_data(world, num_threads, num_elements_per_worker, dist, seed);
@@ -92,6 +98,9 @@ int main(int argc, char* argv[]) {
   std::vector<int> expected = reference_alltoallv(
       MPI_COMM_WORLD, send_buf.data(), send_counts, send_displs);
 
+  Report report;
+  report.push_stats("total_elements", total_buffer_size);
+
   namespace views = kamping::v2::views;
   // The dstl thread_multiple_comm owns omp_get_max_threads() duplicated
   // communicators; build it once (the dup is collective) and reuse it.
@@ -107,14 +116,13 @@ int main(int argc, char* argv[]) {
     if (!matches_reference(recv_buf, expected)) {
       std::cerr << "Invalid result!\n";
     }
+    report.step_iteration();
   }
 
-  std::stringstream sstr;
-  kamping::measurements::SimpleJsonPrinter<double> printer_timer(sstr, config);
-  kamping::measurements::timer().aggregate_and_print(printer_timer);
-
   if (world.rank() == 0) {
-    std::cout << sstr.str() << std::endl;
+    auto out = make_output_stream(output_file);
+    report.push_config(config);
+    report.print(*out);
   }
 
   return 0;
