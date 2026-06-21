@@ -3,7 +3,7 @@ name: alltoallv-singlethreaded
 # The exchange is a plain MPI_Alltoallv (MPI_THREAD_SINGLE).
 executable: benchmark_singlethreaded
 output_path_option_name: "output-file"
-ncores: [1, 2, 4, 8]
+ncores: [16,32,48,96,192,384,768,1536, 3076]
 threads_per_rank: [1]
 omit_seed: true
 time_limit: 4
