@@ -3,7 +3,7 @@ name: alltoallv-singlethreaded
 # The exchange is a plain MPI_Alltoallv (MPI_THREAD_SINGLE).
 executable: benchmark_singlethreaded
 output_path_option_name: "output-file"
-ncores: [16,32,48,96,192,384,768,1536, 3076]
+ncores: [16,32,48,96,192,384,768,1536, 3072]
 threads_per_rank: [1]
 omit_seed: true
 time_limit: 4
@@ -21,6 +21,11 @@ graphs:
   - generator: dummy
     name: a2a
     num-elements-per-worker: 1000000
+    iterations: 5
+    distribution: [uniform, nonuniform]
+  - generator: dummy
+    name: a2a
+    num-elements-per-worker: 10000000
     iterations: 5
     distribution: [uniform, nonuniform]
 config:
